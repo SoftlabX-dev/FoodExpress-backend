@@ -23,9 +23,11 @@ class DriverController extends Controller
             $totalDeliveries = Driver::sum('total_deliveries');
 
             $drivers = Driver::withCount(['activeDeliveries'])
-                ->with(['ratings' => function ($query) {
-                    $query->latest()->limit(5);
-                }])
+                ->with([
+                    'ratings' => function ($query) {
+                        $query->latest()->limit(5);
+                    }
+                ])
                 ->get()
                 ->map(function ($driver) {
                     return [
@@ -110,67 +112,67 @@ class DriverController extends Controller
     }
 
     public function store(Request $request)
-{
-    $validator = Validator::make($request->all(), [
-        // USER
-        'name' => 'required|string|max:255',
-        'email' => 'required|email|unique:users,email',
-        'password' => 'required|string|min:6|confirmed',
-        'phone' => 'required|string|unique:users,phone',
+    {
+        $validator = Validator::make($request->all(), [
+            // USER
+            'name' => 'required|string|max:255',
+            'email' => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6|confirmed',
+            'phone' => 'required|string|unique:users,phone',
 
-        // DRIVER PROFILE
-        'vehicle_type' => 'required',
-        'vehicle_plate' => 'nullable|string|max:20',
-    ]);
-
-    if ($validator->fails()) {
-        return response()->json([
-            'success' => false,
-            'errors' => $validator->errors(),
-        ], 422);
-    }
-
-    try {
-        DB::beginTransaction();
-
-        // 1 Créer le compte utilisateur
-        $user = User::create([
-            'name' => $request->name,
-            'email' => $request->email,
-            'password' => bcrypt($request->password),
-            'role' => 'driver',
-            'phone' => $request->phone,
+            // DRIVER PROFILE
+            'vehicle_type' => 'required',
+            'vehicle_plate' => 'nullable|string|max:20',
         ]);
 
-        // 2️ Créer le profil du livreur lié à user_id
-        $driver = Driver::create([
-            'user_id' => $user->id,
-            'vehicle_type' => $request->vehicle_type,
-            'vehicle_plate' => $request->vehicle_plate,
-            'available' => true,
-            'statut' => 'active',
-        ]);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors(),
+            ], 422);
+        }
 
-        DB::commit();
+        try {
+            DB::beginTransaction();
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Livreur créé avec succès',
-            'user' => $user,
-            'driver' => $driver,
-        ], 201);
+            // 1 Créer le compte utilisateur
+            $user = User::create([
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => bcrypt($request->password),
+                'role' => 'driver',
+                'phone' => $request->phone,
+            ]);
 
-    } catch (\Exception $e) {
+            // 2️ Créer le profil du livreur lié à user_id
+            $driver = Driver::create([
+                'user_id' => $user->id,
+                'vehicle_type' => $request->vehicle_type,
+                'vehicle_plate' => $request->vehicle_plate,
+                'available' => true,
+                'statut' => 'active',
+            ]);
 
-        DB::rollBack();
+            DB::commit();
 
-        return response()->json([
-            'success' => false,
-            'message' => 'Erreur lors de la création du livreur',
-            'error' => $e->getMessage(),
-        ], 500);
+            return response()->json([
+                'success' => true,
+                'message' => 'Livreur créé avec succès',
+                'user' => $user,
+                'driver' => $driver,
+            ], 201);
+
+        } catch (\Exception $e) {
+
+            DB::rollBack();
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la création du livreur',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
-}
 
 
     // Afficher un livreur spécifique
@@ -287,12 +289,16 @@ class DriverController extends Controller
     // Assigner un livreur à une commande
     public function assignToOrder(Request $request)
     {
+        \Log::info('=== ASSIGN DRIVER TO ORDER ===');
+        \Log::info('Request data:', $request->all());
+
         $validator = Validator::make($request->all(), [
             'driver_id' => 'required|exists:livreurs,id',
             'commande_id' => 'required|exists:commandes,id',
         ]);
 
         if ($validator->fails()) {
+            \Log::error('Validation failed:', $validator->errors()->toArray());
             return response()->json([
                 'success' => false,
                 'errors' => $validator->errors(),
@@ -305,12 +311,26 @@ class DriverController extends Controller
             $driver = Driver::findOrFail($request->driver_id);
             $commande = Commande::findOrFail($request->commande_id);
 
-          
+            \Log::info('Driver found:', [
+                'driver_id' => $driver->id,
+                'user_id' => $driver->user_id,
+                'name' => $driver->user->name ?? 'N/A'
+            ]);
+            \Log::info('Commande found:', [
+                'commande_id' => $commande->id,
+                'current_driver_id' => $commande->driver_id,
+                'status' => $commande->statut
+            ]);
 
             // Assigner la commande
             $commande->update([
                 'driver_id' => $driver->id,
                 'statut' => 'on_delivery',
+            ]);
+
+            \Log::info('Commande updated:', [
+                'new_driver_id' => $commande->driver_id,
+                'new_status' => $commande->statut
             ]);
 
             // Mettre à jour le livreur
@@ -319,13 +339,19 @@ class DriverController extends Controller
 
             DB::commit();
 
+            \Log::info('=== ASSIGNMENT SUCCESSFUL ===');
+
             return response()->json([
                 'success' => true,
                 'message' => 'Livreur assigné avec succès',
-                'commande' => $commande->load('livreur'),
+                'commande' => $commande->load('livreur.user'),
             ], 200);
         } catch (\Exception $e) {
             DB::rollBack();
+            \Log::error('Assignment failed:', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
             return response()->json([
                 'success' => false,
                 'message' => 'Erreur lors de l\'assignation',
@@ -335,7 +361,7 @@ class DriverController extends Controller
     }
 
     // Livreurs disponibles pour une commande
- public function getAvailableDrivers(Request $request)
+    public function getAvailableDrivers(Request $request)
     {
         try {
             $commandeId = $request->input('commande_id');
@@ -383,26 +409,42 @@ class DriverController extends Controller
         }
     }
 
-public function getAllDeliveries() {
-    $driver = Driver::where('user_id', auth()->user()->id)->first();
+    public function getAllDeliveries()
+    {
+        try {
+            // Get the driver record for the authenticated user
+            $driver = Driver::where('user_id', auth()->user()->id)->first();
 
-    if (!$driver) {
-        return response()->json([
-            'success' => false,
-            'message' => 'Livreur non trouvé',
-        ], 404);
+            if (!$driver) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Livreur non trouvé',
+                ], 404);
+            }
+
+            // Get all commandes assigned to this driver
+            $commandes = Commande::with(['user', 'plats', 'adresseLivraison', 'livreur.user'])
+                ->where('driver_id', $driver->id)
+                ->orderBy('date_commande', 'desc')
+                ->get();
+
+            return response()->json([
+                'success' => true,
+                'commandes' => $commandes,
+                'driver_info' => [
+                    'driver_id' => $driver->id,
+                    'user_id' => $driver->user_id,
+                    'name' => auth()->user()->name,
+                ]
+            ], 200);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erreur lors de la récupération des livraisons',
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
-
-    $commandes = Commande::with(['user','plats','adresseLivraison','livreur'])
-        ->where('driver_id', $driver->id)
-        ->orderBy('date_commande', 'desc')
-        ->get();
-
-    return response()->json([
-        'success' => true,
-        'commandes' => $commandes
-    ], 200);
-}
 
 
 
