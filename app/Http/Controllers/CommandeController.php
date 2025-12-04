@@ -103,11 +103,29 @@ class CommandeController extends Controller
     {
         $user_id = auth()->user()->id;
 
-        // ✅ Récupérer les commandes du client triées par date décroissante
+        // Récupérer les commandes du client triées par date décroissante avec les infos du livreur
         $commande = Commande::where('user_id', $user_id)
-            ->with('plats')
+            ->with(['plats', 'livreur.user'])
             ->orderBy('created_at', 'desc')
-            ->get();
+            ->get()
+            ->map(function ($order) {
+                $orderData = $order->toArray();
+
+                // Ajouter les informations du livreur si assigné
+                if ($order->livreur && $order->livreur->user) {
+                    $orderData['driver_info'] = [
+                        'id' => $order->livreur->id,
+                        'name' => $order->livreur->user->name,
+                        'phone' => $order->livreur->user->phone,
+                        'vehicle_type' => $order->livreur->vehicle_type,
+                        'vehicle_plate' => $order->livreur->vehicle_plate,
+                    ];
+                } else {
+                    $orderData['driver_info'] = null;
+                }
+
+                return $orderData;
+            });
 
         return response()->json($commande);
     }
